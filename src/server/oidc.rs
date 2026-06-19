@@ -194,12 +194,19 @@ async fn callback_inner(q: CallbackQuery) -> anyhow::Result<Response> {
     Ok(resp)
 }
 
+/// Clear the app session, then send the browser to kanidm's own logout so the
+/// kanidm SSO session is cleared too — otherwise the home-page auto-redirect
+/// would silently sign the user straight back in. kanidm advertises no OIDC
+/// `end_session_endpoint`, and the SSO cookie lives on the kanidm origin, so we
+/// must redirect there; kanidm's `/ui/logout` clears it and lands on its login
+/// page (it supports no post-logout return to us).
 pub async fn logout(headers: HeaderMap) -> Response {
     if let Some(sid) = session::session_id(&headers) {
         session::destroy(&sid);
     }
     let cookie = format!("{}=; Path=/; HttpOnly; Max-Age=0", session::COOKIE);
-    let mut resp = Redirect::to("/").into_response();
+    let kanidm_logout = format!("{}/ui/logout", CONFIG.kanidm_url);
+    let mut resp = Redirect::to(&kanidm_logout).into_response();
     if let Ok(value) = cookie.parse() {
         resp.headers_mut().insert(header::SET_COOKIE, value);
     }
