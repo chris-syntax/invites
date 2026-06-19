@@ -7,18 +7,24 @@ use crate::shared::Dashboard;
 #[component]
 pub fn Home() -> Element {
     let mut dash = use_resource(get_dashboard);
-    let view = dash.read();
 
+    // No landing page: unauthenticated visitors go straight into the OAuth flow.
+    // `/login` is a server route that 302s to kanidm. Runs on the client only
+    // (effects don't run during SSR), once the dashboard reports no user.
+    use_effect(move || {
+        if let Some(Ok(Dashboard { user: None, .. })) = &*dash.read() {
+            spawn(async move {
+                let _ = document::eval("window.location.href = '/login';").await;
+            });
+        }
+    });
+
+    let view = dash.read();
     let body = match &*view {
-        None => rsx! { p { "Loading…" } },
+        None => rsx! { p { aria_busy: "true", "Loading…" } },
         Some(Err(e)) => rsx! { p { "Failed to load: {e}" } },
         Some(Ok(Dashboard { user: None, .. })) => rsx! {
-            hgroup {
-                h1 { "Invites" }
-                p { "Self-service kanidm account invitations." }
-            }
-            p { "Sign in with your kanidm account to create invitation links." }
-            a { href: "/login", role: "button", "Sign in with kanidm" }
+            p { aria_busy: "true", "Redirecting to sign in…" }
         },
         Some(Ok(Dashboard { user: Some(user), invites })) => {
             let invites = invites.clone();
