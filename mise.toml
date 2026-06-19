@@ -1,0 +1,22 @@
+[tools]
+"cargo:dioxus-cli" = "0.7"
+rust = "1.96.0"
+# The web client + server are built with the Dioxus CLI. Install it once with:
+#   mise use "cargo:dioxus-cli@0.7.9"
+# (kept out of [tools] so `mise run lint` doesn't trigger a long CLI build)
+
+[tasks.lint]
+description = "Type-check + clippy against the server build"
+run = "cargo clippy --features server --all-targets -- -D warnings"
+
+[tasks.test]
+description = "Run unit tests (server feature compiles the full stack)"
+run = "cargo test --features server"
+
+[tasks.serve]
+description = "Run the fullstack dev server (needs dioxus-cli)"
+run = "dx serve --platform web"
+
+[tasks.build]
+description = "Release bundle of the web client + server (needs dioxus-cli)"
+run = "dx bundle --platform web --release"

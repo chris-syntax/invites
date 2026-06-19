@@ -1,0 +1,9 @@
+/target
+/dist
+.dioxus
+
+# Local secrets and the sqlite database
+.env
+*.db
+*.db-shm
+*.db-wal
