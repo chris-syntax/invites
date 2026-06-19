@@ -1,34 +1,29 @@
 use std::num::NonZeroU32;
 
 use dioxus::fullstack::Lazy;
-use sqlx::pool::PoolConnection;
-use sqlx::{Row, Sqlite, SqlitePool};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, Database, DatabaseConnection,
+    DatabaseTransaction, DbErr, EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+};
+use sea_orm_migration::MigratorTrait;
 
+use crate::server::migration::Migrator;
+use crate::server::models::invitations::{
+    self, ActiveModel, Column, Entity as Invitations,
+};
 use crate::server::{config::CONFIG, gen_token, kanidm::Kanidm, now};
 use crate::shared::{
     CreateInviteReq, CurrentUser, InvitationView, InviteStatus, InviteePrompt, SignupForm,
     Unavailable, ValidUsername,
 };
 
-/// Lazily-initialised connection pool. First access connects and runs the
-/// schema migration, blocking until ready.
-pub static DB: Lazy<SqlitePool> = Lazy::new(|| async {
-    let pool = SqlitePool::connect(&CONFIG.database_url).await?;
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS invitations (
-            token            TEXT PRIMARY KEY,
-            label            TEXT NOT NULL,
-            created_by       TEXT NOT NULL,
-            created_at       INTEGER NOT NULL,
-            expires_at       INTEGER NOT NULL,
-            max_uses         INTEGER,
-            accounts_created INTEGER NOT NULL DEFAULT 0,
-            revoked          INTEGER NOT NULL DEFAULT 0
-        )",
-    )
-    .execute(&pool)
-    .await?;
-    dioxus::Ok(pool)
+/// Lazily-initialised database connection. First access connects and runs any
+/// outstanding migrations, blocking until ready.
+pub static DB: Lazy<DatabaseConnection> = Lazy::new(|| async {
+    let db = Database::connect(&CONFIG.database_url).await?;
+    Migrator::up(&db, None).await?;
+    dioxus::Ok(db)
 });
 
 fn read_max_uses(raw: Option<i64>) -> Option<NonZeroU32> {
@@ -58,44 +53,30 @@ fn status(
     }
 }
 
-fn row_to_view(r: &sqlx::sqlite::SqliteRow, viewer: &CurrentUser, now: i64) -> InvitationView {
-    let created_by: String = r.get("created_by");
-    let expires_at: i64 = r.get("expires_at");
-    let revoked = r.get::<i64, _>("revoked") != 0;
-    let max_uses = read_max_uses(r.get("max_uses"));
-    let accounts_created = read_count(r.get("accounts_created"));
+fn model_to_view(m: &invitations::Model, viewer: &CurrentUser, now: i64) -> InvitationView {
+    let max_uses = read_max_uses(m.max_uses);
+    let accounts_created = read_count(m.accounts_created);
     InvitationView {
-        token: r.get("token"),
-        label: r.get("label"),
-        created_at: r.get("created_at"),
-        expires_at,
+        token: m.token.clone(),
+        label: m.label.clone(),
+        created_at: m.created_at,
+        expires_at: m.expires_at,
         max_uses,
         accounts_created,
-        status: status(now, expires_at, revoked, max_uses, accounts_created),
-        owned: created_by == viewer.sub,
+        status: status(now, m.expires_at, m.revoked, max_uses, accounts_created),
+        owned: m.created_by == viewer.sub,
     }
 }
 
 /// Invitations the viewer may see: their own, or all for an admin.
 pub async fn list_invitations(viewer: &CurrentUser) -> anyhow::Result<Vec<InvitationView>> {
     let now = now();
-    let rows = if viewer.role.is_admin() {
-        sqlx::query(
-            "SELECT token,label,created_by,created_at,expires_at,max_uses,accounts_created,revoked
-             FROM invitations ORDER BY created_at DESC",
-        )
-        .fetch_all(&*DB)
-        .await?
-    } else {
-        sqlx::query(
-            "SELECT token,label,created_by,created_at,expires_at,max_uses,accounts_created,revoked
-             FROM invitations WHERE created_by = ?1 ORDER BY created_at DESC",
-        )
-        .bind(&viewer.sub)
-        .fetch_all(&*DB)
-        .await?
-    };
-    Ok(rows.iter().map(|r| row_to_view(r, viewer, now)).collect())
+    let mut query = Invitations::find().order_by_desc(Column::CreatedAt);
+    if !viewer.role.is_admin() {
+        query = query.filter(Column::CreatedBy.eq(&viewer.sub));
+    }
+    let rows = query.all(&*DB).await?;
+    Ok(rows.iter().map(|m| model_to_view(m, viewer, now)).collect())
 }
 
 pub async fn create_invitation(
@@ -106,18 +87,17 @@ pub async fn create_invitation(
     let now = now();
     let expires_at = now + i64::from(req.ttl.seconds());
     let max_db: Option<i64> = req.max_uses.map(|m| i64::from(m.get()));
-    sqlx::query(
-        "INSERT INTO invitations
-            (token,label,created_by,created_at,expires_at,max_uses,accounts_created,revoked)
-         VALUES (?1,?2,?3,?4,?5,?6,0,0)",
-    )
-    .bind(&token)
-    .bind(&req.label)
-    .bind(&owner.sub)
-    .bind(now)
-    .bind(expires_at)
-    .bind(max_db)
-    .execute(&*DB)
+    ActiveModel {
+        token: Set(token.clone()),
+        label: Set(req.label.clone()),
+        created_by: Set(owner.sub.clone()),
+        created_at: Set(now),
+        expires_at: Set(expires_at),
+        max_uses: Set(max_db),
+        accounts_created: Set(0),
+        revoked: Set(false),
+    }
+    .insert(&*DB)
     .await?;
     Ok(InvitationView {
         token,
@@ -133,19 +113,14 @@ pub async fn create_invitation(
 
 /// Revoke an invitation. Non-admins may only revoke their own.
 pub async fn revoke(token: &str, actor: &CurrentUser) -> anyhow::Result<()> {
-    let result = if actor.role.is_admin() {
-        sqlx::query("UPDATE invitations SET revoked = 1 WHERE token = ?1")
-            .bind(token)
-            .execute(&*DB)
-            .await?
-    } else {
-        sqlx::query("UPDATE invitations SET revoked = 1 WHERE token = ?1 AND created_by = ?2")
-            .bind(token)
-            .bind(&actor.sub)
-            .execute(&*DB)
-            .await?
-    };
-    if result.rows_affected() == 0 {
+    let mut update = Invitations::update_many()
+        .col_expr(Column::Revoked, Expr::value(true))
+        .filter(Column::Token.eq(token));
+    if !actor.role.is_admin() {
+        update = update.filter(Column::CreatedBy.eq(&actor.sub));
+    }
+    let result = update.exec(&*DB).await?;
+    if result.rows_affected == 0 {
         anyhow::bail!("invitation not found or not yours");
     }
     Ok(())
@@ -154,29 +129,22 @@ pub async fn revoke(token: &str, actor: &CurrentUser) -> anyhow::Result<()> {
 /// Public view of an invitation for an invitee opening the link.
 pub async fn prompt(token: &str) -> anyhow::Result<InviteePrompt> {
     let now = now();
-    let row = sqlx::query("SELECT label,expires_at,max_uses,accounts_created,revoked FROM invitations WHERE token = ?1")
-        .bind(token)
-        .fetch_optional(&*DB)
-        .await?;
-    let Some(r) = row else {
+    let Some(m) = Invitations::find_by_id(token.to_owned()).one(&*DB).await? else {
         return Ok(InviteePrompt::Unavailable(Unavailable::NotFound));
     };
-    let label: String = r.get("label");
-    let expires_at: i64 = r.get("expires_at");
-    let revoked = r.get::<i64, _>("revoked") != 0;
-    let max_uses = read_max_uses(r.get("max_uses"));
-    let used = read_count(r.get("accounts_created"));
-    Ok(match status(now, expires_at, revoked, max_uses, used) {
-        InviteStatus::Active => InviteePrompt::Open { label },
+    let max_uses = read_max_uses(m.max_uses);
+    let used = read_count(m.accounts_created);
+    Ok(match status(now, m.expires_at, m.revoked, max_uses, used) {
+        InviteStatus::Active => InviteePrompt::Open { label: m.label },
         InviteStatus::Expired => InviteePrompt::Unavailable(Unavailable::Expired),
         InviteStatus::Revoked => InviteePrompt::Unavailable(Unavailable::Revoked),
         InviteStatus::Exhausted => InviteePrompt::Unavailable(Unavailable::Exhausted),
     })
 }
 
-/// Redeem an invitation: validate, provision the kanidm person, mint the reset
-/// token, and bump the counter — all under a held write lock so the max-uses
-/// cap is exact. Returns the kanidm reset URL to redirect the invitee to.
+/// Redeem an invitation: reserve a use, provision the kanidm person, and mint
+/// the reset token — all inside one transaction so the max-uses cap is exact.
+/// Returns the kanidm reset URL to redirect the invitee to.
 pub async fn redeem(token: &str, form: SignupForm) -> anyhow::Result<String> {
     // Parse external input into strong types before touching the database.
     let username = ValidUsername::parse(&form.username).map_err(|e| anyhow::anyhow!(e))?;
@@ -189,60 +157,63 @@ pub async fn redeem(token: &str, form: SignupForm) -> anyhow::Result<String> {
         anyhow::bail!("email is required");
     }
 
-    let mut conn = DB.acquire().await?;
-    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-    let result = redeem_locked(&mut conn, token, &username, displayname, email).await;
-    match &result {
-        Ok(_) => {
-            sqlx::query("COMMIT").execute(&mut *conn).await?;
+    let txn = DB.begin().await?;
+    let result = redeem_in_txn(&txn, token, &username, displayname, email).await;
+    match result {
+        Ok(reset_url) => {
+            txn.commit().await?;
+            Ok(reset_url)
         }
-        Err(_) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        Err(e) => {
+            let _ = txn.rollback().await;
+            Err(e)
         }
     }
-    result
 }
 
-async fn redeem_locked(
-    conn: &mut PoolConnection<Sqlite>,
+/// Reserve a use as a single conditional UPDATE: it increments the counter only
+/// while the invitation is still valid. Being one atomic write, it acquires
+/// SQLite's write lock and re-reads the count fresh, so the cap is exact even
+/// under concurrent redeems and SQLite's deferred BEGIN. Returns whether a use
+/// was reserved (false = the invitation is not currently valid).
+async fn reserve_use<C: ConnectionTrait>(conn: &C, token: &str, now: i64) -> Result<bool, DbErr> {
+    let reserved = Invitations::update_many()
+        .col_expr(
+            Column::AccountsCreated,
+            Expr::col(Column::AccountsCreated).add(1),
+        )
+        .filter(Column::Token.eq(token))
+        .filter(Column::Revoked.eq(false))
+        .filter(Column::ExpiresAt.gt(now))
+        .filter(
+            Condition::any()
+                .add(Column::MaxUses.is_null())
+                .add(Expr::col(Column::AccountsCreated).lt(Expr::col(Column::MaxUses))),
+        )
+        .exec(conn)
+        .await?;
+    Ok(reserved.rows_affected > 0)
+}
+
+async fn redeem_in_txn(
+    txn: &DatabaseTransaction,
     token: &str,
     username: &ValidUsername,
     displayname: &str,
     email: &str,
 ) -> anyhow::Result<String> {
-    let now = now();
-    let row =
-        sqlx::query("SELECT expires_at,max_uses,accounts_created,revoked FROM invitations WHERE token = ?1")
-            .bind(token)
-            .fetch_optional(&mut **conn)
-            .await?;
-    let Some(r) = row else {
-        anyhow::bail!("invitation not found");
-    };
-    let expires_at: i64 = r.get("expires_at");
-    let revoked = r.get::<i64, _>("revoked") != 0;
-    let max_uses = read_max_uses(r.get("max_uses"));
-    let used = read_count(r.get("accounts_created"));
-    match status(now, expires_at, revoked, max_uses, used) {
-        InviteStatus::Active => {}
-        InviteStatus::Expired => anyhow::bail!("invitation expired"),
-        InviteStatus::Revoked => anyhow::bail!("invitation revoked"),
-        InviteStatus::Exhausted => anyhow::bail!("invitation fully used"),
+    if !reserve_use(txn, token, now()).await? {
+        anyhow::bail!("invitation is not valid");
     }
 
-    // Provision the account and mint the reset token while still holding the
-    // lock. kanidm owns uniqueness, so a duplicate username surfaces here and
-    // rolls the transaction back without consuming a use.
+    // Provision the account and mint the reset token while the reservation is
+    // still uncommitted. kanidm owns uniqueness, so a duplicate username
+    // surfaces here; the error rolls the transaction back, releasing the use.
     let kanidm = Kanidm::new()?;
     kanidm
         .create_person(username.as_str(), displayname, email)
         .await?;
     let intent = kanidm.credential_update_intent(username.as_str()).await?;
-
-    sqlx::query("UPDATE invitations SET accounts_created = accounts_created + 1 WHERE token = ?1")
-        .bind(token)
-        .execute(&mut **conn)
-        .await?;
 
     Ok(kanidm.reset_url(&intent))
 }
@@ -299,5 +270,75 @@ mod tests {
     fn read_count_clamps_negative_to_zero() {
         assert_eq!(read_count(-1), 0);
         assert_eq!(read_count(42), 42);
+    }
+
+    /// A fresh in-memory database with migrations applied.
+    async fn mem_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        db
+    }
+
+    fn invitation(token: &str, max_uses: Option<i64>, expires_at: i64, revoked: bool) -> ActiveModel {
+        ActiveModel {
+            token: Set(token.to_owned()),
+            label: Set("label".to_owned()),
+            created_by: Set("owner".to_owned()),
+            created_at: Set(0),
+            expires_at: Set(expires_at),
+            max_uses: Set(max_uses),
+            accounts_created: Set(0),
+            revoked: Set(revoked),
+        }
+    }
+
+    async fn count(db: &DatabaseConnection, token: &str) -> i64 {
+        Invitations::find_by_id(token.to_owned())
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .accounts_created
+    }
+
+    #[tokio::test]
+    async fn migration_and_entity_round_trip() {
+        let db = mem_db().await;
+        invitation("t", Some(2), 9_999_999_999, false).insert(&db).await.unwrap();
+        let got = Invitations::find_by_id("t".to_owned()).one(&db).await.unwrap().unwrap();
+        assert_eq!(got.max_uses, Some(2));
+        assert_eq!(got.accounts_created, 0);
+        assert!(!got.revoked);
+    }
+
+    #[tokio::test]
+    async fn reserve_use_stops_at_the_cap() {
+        let db = mem_db().await;
+        invitation("t", Some(2), 9_999_999_999, false).insert(&db).await.unwrap();
+        assert!(reserve_use(&db, "t", 100).await.unwrap());
+        assert!(reserve_use(&db, "t", 100).await.unwrap());
+        // Third attempt is over the cap: no reservation, counter unchanged.
+        assert!(!reserve_use(&db, "t", 100).await.unwrap());
+        assert_eq!(count(&db, "t").await, 2);
+    }
+
+    #[tokio::test]
+    async fn reserve_use_allows_unlimited() {
+        let db = mem_db().await;
+        invitation("t", None, 9_999_999_999, false).insert(&db).await.unwrap();
+        for _ in 0..5 {
+            assert!(reserve_use(&db, "t", 100).await.unwrap());
+        }
+        assert_eq!(count(&db, "t").await, 5);
+    }
+
+    #[tokio::test]
+    async fn reserve_use_rejects_revoked_and_expired() {
+        let db = mem_db().await;
+        invitation("revoked", None, 9_999_999_999, true).insert(&db).await.unwrap();
+        invitation("expired", None, 50, false).insert(&db).await.unwrap();
+        assert!(!reserve_use(&db, "revoked", 100).await.unwrap());
+        assert!(!reserve_use(&db, "expired", 100).await.unwrap());
+        assert!(!reserve_use(&db, "missing", 100).await.unwrap());
     }
 }

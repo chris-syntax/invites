@@ -10,7 +10,9 @@ serde = { version = "1", features = ["derive"] }
 # Server-only dependencies. Gated behind the `server` feature so the wasm
 # client build never pulls them in.
 tokio = { version = "1", features = ["full"], optional = true }
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"], optional = true }
+sea-orm = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros"], optional = true }
+sea-orm-migration = { version = "1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls"], optional = true }
+async-trait = { version = "0.1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 openidconnect = { version = "4", optional = true } # default features: reqwest + rustls-tls
 serde_json = { version = "1", optional = true }
@@ -25,7 +27,9 @@ web = ["dioxus/web"]
 server = [
     "dioxus/server",
     "dep:tokio",
-    "dep:sqlx",
+    "dep:sea-orm",
+    "dep:sea-orm-migration",
+    "dep:async-trait",
     "dep:reqwest",
     "dep:openidconnect",
     "dep:serde_json",

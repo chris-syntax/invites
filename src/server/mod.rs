@@ -4,6 +4,8 @@
 pub mod config;
 pub mod db;
 pub mod kanidm;
+pub mod migration;
+pub mod models;
 pub mod oidc;
 pub mod session;
 
