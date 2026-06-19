@@ -31,6 +31,9 @@ pub fn gen_token() -> String {
 
 /// Build the axum router (Dioxus app + custom OIDC routes) and run the server.
 pub fn serve(app: fn() -> Element) {
+    // Load .env and validate config before serving, so a misconfiguration fails
+    // fast at startup rather than poisoning the config lock mid-request.
+    config::load();
     dioxus::serve(move || async move {
         use dioxus::server::axum::routing::get;
         let router = dioxus::server::router(app)

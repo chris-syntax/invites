@@ -13,6 +13,15 @@ pub struct Config {
     pub reset_token_ttl_secs: u32,
 }
 
+/// Load `.env` (if present) and eagerly validate configuration. Call once at
+/// startup: a missing required variable then aborts the process at boot with a
+/// clear message, instead of panicking on the first request and poisoning this
+/// lazily-initialised lock (which would wedge every later request).
+pub fn load() {
+    let _ = dotenvy::dotenv();
+    LazyLock::force(&CONFIG);
+}
+
 fn required(key: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| panic!("missing required env var {key}"))
 }
