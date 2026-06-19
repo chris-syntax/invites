@@ -46,7 +46,13 @@ static META: OnceCell<CoreProviderMetadata> = OnceCell::const_new();
 
 async fn provider_metadata() -> anyhow::Result<&'static CoreProviderMetadata> {
     META.get_or_try_init(|| async {
-        let issuer = IssuerUrl::new(CONFIG.kanidm_url.clone())?;
+        // kanidm's OIDC issuer is per-client (`<kanidm>/oauth2/openid/<client>`),
+        // not the REST API root in `kanidm_url`. The id_token `iss` claim is this
+        // URL, so discovery and verification must use it.
+        let issuer = IssuerUrl::new(format!(
+            "{}/oauth2/openid/{}",
+            CONFIG.kanidm_url, CONFIG.oidc_client_id
+        ))?;
         let meta = CoreProviderMetadata::discover_async(issuer, &*HTTP).await?;
         anyhow::Ok(meta)
     })
