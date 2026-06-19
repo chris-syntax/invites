@@ -12,6 +12,7 @@ use crate::server::migration::Migrator;
 use crate::server::models::invitations::{
     self, ActiveModel, Column, Entity as Invitations,
 };
+use crate::server::kanidm::CreatePersonError;
 use crate::server::{config::CONFIG, gen_token, kanidm::Kanidm, now};
 use crate::shared::{
     CreateInviteReq, CurrentUser, InvitationView, InviteStatus, InviteePrompt, SignupForm,
@@ -142,26 +143,40 @@ pub async fn prompt(token: &str) -> anyhow::Result<InviteePrompt> {
     })
 }
 
+/// Why a redeem attempt failed, in terms the signup endpoint can turn into
+/// invitee-facing feedback. `UsernameTaken` is split out because it is the
+/// common, user-correctable case.
+pub enum RedeemError {
+    /// Submitted form data was rejected (bad username, missing field).
+    Invalid(String),
+    /// The invitation is no longer usable (expired, revoked, exhausted, gone).
+    Unavailable,
+    /// The chosen username already exists in kanidm.
+    UsernameTaken,
+    /// An unexpected server/database/kanidm error.
+    Internal(anyhow::Error),
+}
+
 /// Redeem an invitation: reserve a use, provision the kanidm person, and mint
 /// the reset token — all inside one transaction so the max-uses cap is exact.
 /// Returns the kanidm reset URL to redirect the invitee to.
-pub async fn redeem(token: &str, form: SignupForm) -> anyhow::Result<String> {
+pub async fn redeem(token: &str, form: SignupForm) -> Result<String, RedeemError> {
     // Parse external input into strong types before touching the database.
-    let username = ValidUsername::parse(&form.username).map_err(|e| anyhow::anyhow!(e))?;
+    let username = ValidUsername::parse(&form.username).map_err(RedeemError::Invalid)?;
     let displayname = form.displayname.trim();
     if displayname.is_empty() {
-        anyhow::bail!("display name is required");
+        return Err(RedeemError::Invalid("display name is required".into()));
     }
     let email = form.email.trim();
     if email.is_empty() {
-        anyhow::bail!("email is required");
+        return Err(RedeemError::Invalid("email is required".into()));
     }
 
-    let txn = DB.begin().await?;
+    let txn = DB.begin().await.map_err(|e| RedeemError::Internal(e.into()))?;
     let result = redeem_in_txn(&txn, token, &username, displayname, email).await;
     match result {
         Ok(reset_url) => {
-            txn.commit().await?;
+            txn.commit().await.map_err(|e| RedeemError::Internal(e.into()))?;
             Ok(reset_url)
         }
         Err(e) => {
@@ -201,19 +216,30 @@ async fn redeem_in_txn(
     username: &ValidUsername,
     displayname: &str,
     email: &str,
-) -> anyhow::Result<String> {
-    if !reserve_use(txn, token, now()).await? {
-        anyhow::bail!("invitation is not valid");
+) -> Result<String, RedeemError> {
+    let reserved = reserve_use(txn, token, now())
+        .await
+        .map_err(|e| RedeemError::Internal(e.into()))?;
+    if !reserved {
+        return Err(RedeemError::Unavailable);
     }
 
     // Provision the account and mint the reset token while the reservation is
     // still uncommitted. kanidm owns uniqueness, so a duplicate username
-    // surfaces here; the error rolls the transaction back, releasing the use.
-    let kanidm = Kanidm::new()?;
+    // surfaces here as UsernameTaken; any error rolls the transaction back,
+    // releasing the use.
+    let kanidm = Kanidm::new().map_err(RedeemError::Internal)?;
     kanidm
         .create_person(username.as_str(), displayname, email)
-        .await?;
-    let intent = kanidm.credential_update_intent(username.as_str()).await?;
+        .await
+        .map_err(|e| match e {
+            CreatePersonError::UsernameTaken => RedeemError::UsernameTaken,
+            CreatePersonError::Other(err) => RedeemError::Internal(err),
+        })?;
+    let intent = kanidm
+        .credential_update_intent(username.as_str())
+        .await
+        .map_err(RedeemError::Internal)?;
 
     Ok(kanidm.reset_url(&intent))
 }

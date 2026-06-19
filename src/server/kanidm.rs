@@ -10,6 +10,14 @@ pub struct Kanidm {
     http: reqwest::Client,
 }
 
+/// Why creating a person failed. The collision case is split out because it is
+/// the common, user-correctable one: the chosen username is already taken.
+pub enum CreatePersonError {
+    /// kanidm rejected the `name` as non-unique (HTTP 409).
+    UsernameTaken,
+    Other(anyhow::Error),
+}
+
 #[derive(Deserialize)]
 struct CuIntentToken {
     token: String,
@@ -25,13 +33,15 @@ impl Kanidm {
         Ok(Self { http })
     }
 
-    /// Create a person with name, displayname and mail in a single `Entry`.
+    /// Create a person with name, displayname and mail in a single `Entry`. A
+    /// duplicate username surfaces as `CreatePersonError::UsernameTaken` so the
+    /// invitee can be asked to pick another, rather than seeing a generic error.
     pub async fn create_person(
         &self,
         name: &str,
         displayname: &str,
         mail: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), CreatePersonError> {
         let body = serde_json::json!({
             "attrs": {
                 "name": [name],
@@ -45,11 +55,17 @@ impl Kanidm {
             .bearer_auth(&CONFIG.service_account_token)
             .json(&body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| CreatePersonError::Other(e.into()))?;
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            return Err(CreatePersonError::UsernameTaken);
+        }
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("kanidm create_person failed ({status}): {text}");
+            return Err(CreatePersonError::Other(anyhow::anyhow!(
+                "kanidm create_person failed ({status}): {text}"
+            )));
         }
         Ok(())
     }

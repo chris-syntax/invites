@@ -192,6 +192,23 @@ pub struct SignupForm {
     pub email: String,
 }
 
+/// The result of a signup attempt, as data rather than a transport error: the
+/// form needs to tell these cases apart to show the right message. Only genuine
+/// network/RPC failures surface as an `Err` from the server function.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SignupOutcome {
+    /// Account created; send the invitee to this kanidm credential-reset URL.
+    Success { reset_url: String },
+    /// The chosen username is already taken — the common, correctable case.
+    UsernameTaken,
+    /// The submitted details were rejected, with a reason to show.
+    Invalid(String),
+    /// The invitation is no longer usable (expired, revoked, exhausted, gone).
+    Unavailable,
+    /// An unexpected server-side failure.
+    Internal,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
