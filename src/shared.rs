@@ -38,8 +38,7 @@ pub struct CurrentUser {
     pub role: Role,
 }
 
-/// Lifecycle status of an invitation. Exactly one variant holds at a time, so
-/// "revoked but also active" cannot be represented.
+/// Lifecycle status of an invitation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InviteStatus {
     Active,
@@ -65,7 +64,8 @@ pub struct InvitationView {
     pub token: String,
     pub label: String,
     pub created_at: i64,
-    pub expires_at: i64,
+    /// Absolute expiry in unix seconds; `None` for a non-expiring invitation.
+    pub expires_at: Option<i64>,
     pub max_uses: Option<NonZeroU32>,
     pub accounts_created: u32,
     pub status: InviteStatus,
@@ -100,11 +100,10 @@ impl Unavailable {
     }
 }
 
-/// What an invitee sees when opening a link: either an open form or a reason it
-/// is unavailable — never both, never neither.
+/// What an invitee sees when opening a link.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum InviteePrompt {
-    Open { label: String },
+    Open,
     Unavailable(Unavailable),
 }
 
@@ -174,12 +173,12 @@ impl ValidUsername {
     }
 }
 
-/// Request body for creating an invitation. `ttl` and `max_uses` are already
-/// constrained by their types.
+/// Request body for creating an invitation. `ttl` is `None` for a non-expiring
+/// link; `max_uses` is `None` for unlimited.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CreateInviteReq {
     pub label: String,
-    pub ttl: Ttl,
+    pub ttl: Option<Ttl>,
     pub max_uses: Option<NonZeroU32>,
 }
 

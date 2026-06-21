@@ -18,7 +18,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Invitations::Label).text().not_null())
                     .col(ColumnDef::new(Invitations::CreatedBy).text().not_null())
                     .col(ColumnDef::new(Invitations::CreatedAt).big_integer().not_null())
-                    .col(ColumnDef::new(Invitations::ExpiresAt).big_integer().not_null())
+                    .col(ColumnDef::new(Invitations::ExpiresAt).big_integer())
                     .col(ColumnDef::new(Invitations::MaxUses).big_integer())
                     .col(
                         ColumnDef::new(Invitations::AccountsCreated)

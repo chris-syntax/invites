@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::api::get_dashboard;
-use crate::components::{CreateInviteForm, InviteList};
+use crate::components::{CreateInviteForm, InviteList, Logo};
 use crate::shared::Dashboard;
 
 #[component]
@@ -20,27 +20,44 @@ pub fn Home() -> Element {
     });
 
     let view = dash.read();
-    let body = match &*view {
-        None => rsx! { p { aria_busy: "true", "Loading…" } },
-        Some(Err(e)) => rsx! { p { "Failed to load: {e}" } },
+    match &*view {
+        None => rsx! {
+            div { class: "min-h-screen flex items-center justify-center text-muted",
+                "loading your loaf…"
+            }
+        },
+        Some(Err(e)) => rsx! {
+            div { class: "min-h-screen flex items-center justify-center text-muted",
+                "couldn't load your invites: {e}"
+            }
+        },
         Some(Ok(Dashboard { user: None, .. })) => rsx! {
-            p { aria_busy: "true", "Redirecting to sign in…" }
+            div { class: "min-h-screen flex items-center justify-center text-muted",
+                "redirecting you to sign in…"
+            }
         },
         Some(Ok(Dashboard { user: Some(user), invites })) => {
             let invites = invites.clone();
+            let name = user.display_name.clone();
             rsx! {
-                nav {
-                    ul { li { strong { "Invites" } } }
-                    ul {
-                        li { "Signed in as {user.display_name}" }
-                        li { a { href: "/logout", "Sign out" } }
+                header { class: "flex items-center justify-between gap-4 px-6 py-4 bg-cream border-b border-line",
+                    Logo {}
+                    div { class: "flex items-center gap-4 text-[0.8125rem] text-muted",
+                        span { "signed in as " span { class: "text-ink font-medium", "{name}" } }
+                        a { class: "btn btn-outline btn-sm", href: "/logout", "sign out" }
                     }
                 }
-                CreateInviteForm { on_created: move |_| dash.restart() }
-                InviteList { invites, on_revoked: move |_| dash.restart() }
+                main { class: "max-w-[880px] mx-auto px-6 pt-12 pb-20 flex flex-col gap-8",
+                    CreateInviteForm { on_created: move |_| dash.restart() }
+                    section { class: "flex flex-col gap-4",
+                        div { class: "flex flex-col gap-1",
+                            span { class: "eyebrow", "your invites" }
+                            h2 { class: "text-xl text-ink", "everyone you've welcomed in" }
+                        }
+                        InviteList { invites, on_revoked: move |_| dash.restart() }
+                    }
+                }
             }
         }
-    };
-
-    rsx! { main { class: "container", {body} } }
+    }
 }

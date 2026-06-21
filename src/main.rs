@@ -19,9 +19,13 @@ fn main() {
     server::serve(app);
 }
 
+// Compiled from `tailwind.css` at the project root; dx runs the Tailwind
+// watcher automatically during `dx serve` / `dx bundle`.
+static TAILWIND: Asset = asset!("/assets/tailwind.css");
+
 fn app() -> Element {
     rsx! {
-        document::Stylesheet { href: "https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" }
+        document::Stylesheet { href: TAILWIND }
         Router::<Route> {}
     }
 }

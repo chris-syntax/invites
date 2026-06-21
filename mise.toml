@@ -1,22 +1,43 @@
 [tools]
 "cargo:dioxus-cli" = "0.7"
 rust = "1.96.0"
+node = '24'
+
 # The web client + server are built with the Dioxus CLI. Install it once with:
 #   mise use "cargo:dioxus-cli@0.7.9"
 # (kept out of [tools] so `mise run lint` doesn't trigger a long CLI build)
 
+[tasks.tailwind]
+description = "Compile tailwind.css → assets/tailwind.css"
+run = "npx @tailwindcss/cli -i ./tailwind.css -o ./assets/tailwind.css"
+sources = ["tailwind.css", "src/**/*.rs"]
+outputs = ["assets/tailwind.css"]
+
+[tasks."tailwind:watch"]
+description = "Recompile Tailwind on change (dx serve already does this; use standalone if needed)"
+run = "npx @tailwindcss/cli -i ./tailwind.css -o ./assets/tailwind.css --watch"
+
 [tasks.lint]
 description = "Type-check + clippy against the server build"
+# The asset! macro needs assets/tailwind.css to exist at compile time.
+depends = ["tailwind"]
 run = "cargo clippy --features server --all-targets -- -D warnings"
 
 [tasks.test]
 description = "Run unit tests (server feature compiles the full stack)"
+depends = ["tailwind"]
 run = "cargo test --features server"
 
 [tasks.serve]
-description = "Run the fullstack dev server (needs dioxus-cli)"
+description = "Run the fullstack dev server (needs dioxus-cli; auto-runs Tailwind)"
 run = "dx serve --platform web"
 
 [tasks.build]
-description = "Release bundle of the web client + server (needs dioxus-cli)"
+description = "Release bundle of the web client + server (needs dioxus-cli; auto-runs Tailwind)"
 run = "dx bundle --platform web --release"
+
+[tasks.dev]
+description = "Dev mode. Automatically watch all code for changes and serve it up."
+run = [
+  { tasks = ["serve", "tailwind:watch"]}
+]

@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::api::{get_invite, signup};
+use crate::components::Logo;
 use crate::shared::{InviteePrompt, SignupForm, SignupOutcome};
 
 #[component]
@@ -23,15 +24,15 @@ pub fn Invite(token: String) -> Element {
 
     let view = prompt.read();
     let body = match &*view {
-        None => rsx! { p { aria_busy: "true", "Loading…" } },
-        Some(Err(e)) => rsx! { p { "Failed to load: {e}" } },
+        None => rsx! { p { class: "text-center text-muted", "loading…" } },
+        Some(Err(e)) => rsx! { p { class: "text-center text-muted", "couldn't load this invite: {e}" } },
         Some(Ok(InviteePrompt::Unavailable(reason))) => rsx! {
-            hgroup {
-                h1 { "Invitation unavailable" }
-                p { "{reason.message()}" }
+            div { class: "flex flex-col gap-2 text-center",
+                h1 { class: "text-2xl text-ink", "this invite isn't available" }
+                p { class: "text-[0.8125rem] text-muted", "{reason.message()}" }
             }
         },
-        Some(Ok(InviteePrompt::Open { label })) => {
+        Some(Ok(InviteePrompt::Open)) => {
             let token = token.clone();
             let on_submit = move |evt: FormEvent| {
                 // Stop the browser's native navigation; we submit over RPC.
@@ -69,18 +70,21 @@ pub fn Invite(token: String) -> Element {
                 }
             };
             rsx! {
-                hgroup {
-                    h1 { "You're invited" }
-                    if !label.is_empty() {
-                        p { "{label}" }
+                div { class: "flex flex-col gap-2 text-center",
+                    h1 { class: "text-3xl text-ink",
+                        "you're "
+                        span { class: "italic text-accent", "invited" }
+                        " 🍞"
                     }
                 }
                 if let Some(msg) = error() {
-                    p { role: "alert", style: "color: var(--pico-del-color)", "{msg}" }
+                    p { class: "alert-error", role: "alert", "{msg}" }
                 }
-                form { onsubmit: on_submit,
-                    label { "Username"
+                form { class: "flex flex-col gap-[18px]", onsubmit: on_submit,
+                    label { class: "flex flex-col gap-1.5",
+                        span { class: "text-[0.8125rem] font-semibold text-ink", "username" }
                         input {
+                            class: "field-input",
                             name: "username",
                             required: true,
                             autocapitalize: "off",
@@ -89,18 +93,24 @@ pub fn Invite(token: String) -> Element {
                             value: "{username}",
                             oninput: move |e| username.set(e.value()),
                         }
-                        small { "Lowercase letters, digits, '.', '-' and '_'. Must start with a letter." }
+                        span { class: "text-[0.6875rem] text-muted",
+                            "lowercase letters, digits, '.', '-' and '_'. must start with a letter."
+                        }
                     }
-                    label { "Display name"
+                    label { class: "flex flex-col gap-1.5",
+                        span { class: "text-[0.8125rem] font-semibold text-ink", "display name" }
                         input {
+                            class: "field-input",
                             name: "displayname",
                             required: true,
                             value: "{displayname}",
                             oninput: move |e| displayname.set(e.value()),
                         }
                     }
-                    label { "Email"
+                    label { class: "flex flex-col gap-1.5",
+                        span { class: "text-[0.8125rem] font-semibold text-ink", "email" }
                         input {
+                            class: "field-input",
                             name: "email",
                             r#type: "email",
                             required: true,
@@ -108,14 +118,23 @@ pub fn Invite(token: String) -> Element {
                             oninput: move |e| email.set(e.value()),
                         }
                     }
-                    button { r#type: "submit", disabled: submitting(),
-                        if submitting() { "Creating…" } else { "Create account" }
+                    button { class: "btn btn-primary w-full mt-1", r#type: "submit", disabled: submitting(),
+                        if submitting() { "baking your account…" } else { "create account" }
                     }
                 }
-                p { small { "You'll set your password on the kanidm site after this step." } }
+                p { class: "text-[0.6875rem] text-muted text-center",
+                    "you'll set your password on the kanidm site after this step."
+                }
             }
         }
     };
 
-    rsx! { main { class: "container", {body} } }
+    rsx! {
+        main { class: "min-h-screen flex items-center justify-center px-5 py-10",
+            div { class: "w-full max-w-[440px] card rounded-[22px] shadow-lift p-9 flex flex-col gap-5",
+                div { class: "flex justify-center", Logo {} }
+                {body}
+            }
+        }
+    }
 }

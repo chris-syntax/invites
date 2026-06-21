@@ -1,0 +1,117 @@
+@import "tailwindcss";
+@source "./src/**/*.rs";
+
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Outfit:wght@300;400;500;600;700&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600&display=swap');
+
+
+/* `static`: always emit every brand variable to :root. Without it, dx's
+   compile tree-shakes the @theme vars it doesn't see "used", leaving the
+   var(--color-*) references in our @layer rules undefined → unstyled page. */
+@theme static {
+  /* Deep navy ink */
+  --color-ink:      #003049;
+  --color-ink-900:  #000016;
+  --color-ink-500:  #33596d;
+  --color-ink-300:  #8098a4;
+  --color-ink-100:  #d9e0e4;
+
+  /* Warm red accent — used sparingly */
+  --color-accent:      #d62828;
+  --color-accent-900:  #a30000;
+  --color-accent-500:  #de5353;
+  --color-accent-100:  #f9dfdf;
+
+  /* Surfaces & neutrals */
+  --color-cream:   #fff7ed;
+  --color-sunken:  #f9fafb;
+  --color-line:    #e5e7eb;
+  --color-muted:   #6b7280;
+
+  /* State */
+  --color-success:      #4e9e76;
+  --color-success-soft: #ecfdf5;
+  --color-warning:      #d97b2a;
+  --color-warning-soft: #fff7ed;
+  --color-danger:       #ef4444;
+  --color-danger-soft:  #fef2f2;
+
+  /* Type */
+  --font-display: 'Lora', Georgia, serif;
+  --font-body:    'Outfit', system-ui, sans-serif;
+  --font-mono:    'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Soft, navy-tinted shadows + the red glow under primary actions */
+  --shadow-soft:   0 1px 3px rgba(0,48,73,0.08);
+  --shadow-card:   0 4px 12px rgba(0,48,73,0.10);
+  --shadow-lift:   0 8px 24px rgba(0,48,73,0.12);
+  --shadow-accent: 0 4px 16px rgba(214,40,40,0.35);
+}
+
+@layer base {
+  body {
+    background: var(--color-cream);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+}
+
+@layer components {
+  /* Pill buttons with a springy press-shrink. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 h-10 px-[18px]
+           rounded-full font-body text-[0.9375rem] font-semibold tracking-[0.01em]
+           whitespace-nowrap border border-transparent cursor-pointer
+           transition-[background,transform,box-shadow] duration-150 ease-out
+           active:translate-y-px active:scale-[0.985]
+           disabled:opacity-45 disabled:cursor-not-allowed;
+  }
+  .btn-sm { @apply h-8 px-3 text-[0.8125rem]; }
+  .btn-primary { @apply bg-accent text-white shadow-accent hover:bg-accent-900 active:shadow-soft; }
+  .btn-outline { @apply bg-white text-ink border-line shadow-soft hover:bg-cream; }
+  .btn-ghost   { @apply bg-transparent text-ink hover:bg-ink-100; }
+
+  /* Inputs / selects: 1.5px line, soft inner shadow, red focus ring. */
+  .field-input {
+    @apply w-full h-[42px] px-[14px] font-body text-[0.9375rem] text-ink bg-white
+           border-[1.5px] border-line rounded-xl
+           shadow-[inset_0_1px_2px_rgba(0,48,73,0.06)]
+           transition-[border-color,box-shadow] duration-150 ease-out
+           placeholder:text-muted
+           focus:outline-none focus:border-accent-500
+           focus:shadow-[0_0_0_3px_rgba(214,40,40,0.12)];
+  }
+
+  /* White card floating on cream. */
+  .card {
+    @apply bg-white border border-line rounded-2xl shadow-soft p-7;
+  }
+  .card-accent { @apply border-t-[3px] border-t-accent; }
+
+  /* Status / meta pills. */
+  .badge {
+    @apply inline-flex items-center gap-1.5 h-6 px-[11px] rounded-full
+           text-[0.8125rem] font-semibold leading-none whitespace-nowrap
+           before:content-[''] before:w-[7px] before:h-[7px]
+           before:rounded-full before:bg-current;
+  }
+  .badge-success { @apply bg-success-soft text-success; }
+  .badge-warning { @apply bg-warning-soft text-warning; }
+  .badge-accent  { @apply bg-accent-100 text-accent-900; }
+  .badge-neutral { @apply bg-ink-100 text-ink; }
+
+  /* Mono uppercase eyebrow / table headers. */
+  .eyebrow {
+    @apply font-mono text-[0.6875rem] tracking-[0.08em] uppercase
+           font-medium text-muted;
+  }
+
+  .alert-error {
+    @apply flex gap-2.5 px-4 py-3 rounded-xl text-[0.8125rem]
+           bg-danger-soft text-accent-900 border border-accent-100;
+  }
+}

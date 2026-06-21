@@ -38,14 +38,14 @@ fn read_count(raw: i64) -> u32 {
 /// Compute lifecycle status; precedence is revoked > expired > exhausted.
 fn status(
     now: i64,
-    expires_at: i64,
+    expires_at: Option<i64>,
     revoked: bool,
     max_uses: Option<NonZeroU32>,
     used: u32,
 ) -> InviteStatus {
     if revoked {
         InviteStatus::Revoked
-    } else if expires_at <= now {
+    } else if expires_at.is_some_and(|e| e <= now) {
         InviteStatus::Expired
     } else if max_uses.is_some_and(|m| used >= m.get()) {
         InviteStatus::Exhausted
@@ -86,7 +86,7 @@ pub async fn create_invitation(
 ) -> anyhow::Result<InvitationView> {
     let token = gen_token();
     let now = now();
-    let expires_at = now + i64::from(req.ttl.seconds());
+    let expires_at = req.ttl.map(|t| now + i64::from(t.seconds()));
     let max_db: Option<i64> = req.max_uses.map(|m| i64::from(m.get()));
     ActiveModel {
         token: Set(token.clone()),
@@ -136,7 +136,7 @@ pub async fn prompt(token: &str) -> anyhow::Result<InviteePrompt> {
     let max_uses = read_max_uses(m.max_uses);
     let used = read_count(m.accounts_created);
     Ok(match status(now, m.expires_at, m.revoked, max_uses, used) {
-        InviteStatus::Active => InviteePrompt::Open { label: m.label },
+        InviteStatus::Active => InviteePrompt::Open,
         InviteStatus::Expired => InviteePrompt::Unavailable(Unavailable::Expired),
         InviteStatus::Revoked => InviteePrompt::Unavailable(Unavailable::Revoked),
         InviteStatus::Exhausted => InviteePrompt::Unavailable(Unavailable::Exhausted),
@@ -199,7 +199,11 @@ async fn reserve_use<C: ConnectionTrait>(conn: &C, token: &str, now: i64) -> Res
         )
         .filter(Column::Token.eq(token))
         .filter(Column::Revoked.eq(false))
-        .filter(Column::ExpiresAt.gt(now))
+        .filter(
+            Condition::any()
+                .add(Column::ExpiresAt.is_null())
+                .add(Column::ExpiresAt.gt(now)),
+        )
         .filter(
             Condition::any()
                 .add(Column::MaxUses.is_null())
@@ -254,34 +258,39 @@ mod tests {
 
     #[test]
     fn active_when_unexpired_unrevoked_and_under_cap() {
-        assert_eq!(status(100, 200, false, nz(5), 2), InviteStatus::Active);
+        assert_eq!(status(100, Some(200), false, nz(5), 2), InviteStatus::Active);
     }
 
     #[test]
     fn no_cap_is_never_exhausted() {
-        assert_eq!(status(100, 200, false, None, 9_999), InviteStatus::Active);
+        assert_eq!(status(100, Some(200), false, None, 9_999), InviteStatus::Active);
+    }
+
+    #[test]
+    fn no_expiry_is_never_expired() {
+        assert_eq!(status(i64::MAX, None, false, None, 0), InviteStatus::Active);
     }
 
     #[test]
     fn exhausted_at_or_above_cap() {
-        assert_eq!(status(100, 200, false, nz(3), 3), InviteStatus::Exhausted);
-        assert_eq!(status(100, 200, false, nz(3), 4), InviteStatus::Exhausted);
+        assert_eq!(status(100, Some(200), false, nz(3), 3), InviteStatus::Exhausted);
+        assert_eq!(status(100, Some(200), false, nz(3), 4), InviteStatus::Exhausted);
     }
 
     #[test]
     fn expired_when_now_reaches_expiry() {
-        assert_eq!(status(200, 200, false, None, 0), InviteStatus::Expired);
-        assert_eq!(status(201, 200, false, None, 0), InviteStatus::Expired);
+        assert_eq!(status(200, Some(200), false, None, 0), InviteStatus::Expired);
+        assert_eq!(status(201, Some(200), false, None, 0), InviteStatus::Expired);
     }
 
     #[test]
     fn revoked_takes_precedence_over_expired_and_exhausted() {
-        assert_eq!(status(300, 200, true, nz(1), 5), InviteStatus::Revoked);
+        assert_eq!(status(300, Some(200), true, nz(1), 5), InviteStatus::Revoked);
     }
 
     #[test]
     fn expired_takes_precedence_over_exhausted() {
-        assert_eq!(status(300, 200, false, nz(1), 5), InviteStatus::Expired);
+        assert_eq!(status(300, Some(200), false, nz(1), 5), InviteStatus::Expired);
     }
 
     #[test]
@@ -305,7 +314,7 @@ mod tests {
         db
     }
 
-    fn invitation(token: &str, max_uses: Option<i64>, expires_at: i64, revoked: bool) -> ActiveModel {
+    fn invitation(token: &str, max_uses: Option<i64>, expires_at: Option<i64>, revoked: bool) -> ActiveModel {
         ActiveModel {
             token: Set(token.to_owned()),
             label: Set("label".to_owned()),
@@ -330,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn migration_and_entity_round_trip() {
         let db = mem_db().await;
-        invitation("t", Some(2), 9_999_999_999, false).insert(&db).await.unwrap();
+        invitation("t", Some(2), Some(9_999_999_999), false).insert(&db).await.unwrap();
         let got = Invitations::find_by_id("t".to_owned()).one(&db).await.unwrap().unwrap();
         assert_eq!(got.max_uses, Some(2));
         assert_eq!(got.accounts_created, 0);
@@ -340,7 +349,7 @@ mod tests {
     #[tokio::test]
     async fn reserve_use_stops_at_the_cap() {
         let db = mem_db().await;
-        invitation("t", Some(2), 9_999_999_999, false).insert(&db).await.unwrap();
+        invitation("t", Some(2), Some(9_999_999_999), false).insert(&db).await.unwrap();
         assert!(reserve_use(&db, "t", 100).await.unwrap());
         assert!(reserve_use(&db, "t", 100).await.unwrap());
         // Third attempt is over the cap: no reservation, counter unchanged.
@@ -351,7 +360,7 @@ mod tests {
     #[tokio::test]
     async fn reserve_use_allows_unlimited() {
         let db = mem_db().await;
-        invitation("t", None, 9_999_999_999, false).insert(&db).await.unwrap();
+        invitation("t", None, Some(9_999_999_999), false).insert(&db).await.unwrap();
         for _ in 0..5 {
             assert!(reserve_use(&db, "t", 100).await.unwrap());
         }
@@ -359,10 +368,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reserve_use_allows_non_expiring() {
+        let db = mem_db().await;
+        invitation("t", None, None, false).insert(&db).await.unwrap();
+        assert!(reserve_use(&db, "t", i64::MAX).await.unwrap());
+        assert_eq!(count(&db, "t").await, 1);
+    }
+
+    #[tokio::test]
     async fn reserve_use_rejects_revoked_and_expired() {
         let db = mem_db().await;
-        invitation("revoked", None, 9_999_999_999, true).insert(&db).await.unwrap();
-        invitation("expired", None, 50, false).insert(&db).await.unwrap();
+        invitation("revoked", None, Some(9_999_999_999), true).insert(&db).await.unwrap();
+        invitation("expired", None, Some(50), false).insert(&db).await.unwrap();
         assert!(!reserve_use(&db, "revoked", 100).await.unwrap());
         assert!(!reserve_use(&db, "expired", 100).await.unwrap());
         assert!(!reserve_use(&db, "missing", 100).await.unwrap());

@@ -1,5 +1,6 @@
-//! The `invitations` table. Times are unix seconds (`i64`); `max_uses` is null
-//! for an unlimited invitation; `revoked` is stored as a boolean.
+//! The `invitations` table. Times are unix seconds (`i64`); `expires_at` is null
+//! for a non-expiring invitation and `max_uses` is null for an unlimited one;
+//! `revoked` is stored as a boolean.
 
 use sea_orm::entity::prelude::*;
 
@@ -11,7 +12,7 @@ pub struct Model {
     pub label: String,
     pub created_by: String,
     pub created_at: i64,
-    pub expires_at: i64,
+    pub expires_at: Option<i64>,
     pub max_uses: Option<i64>,
     pub accounts_created: i64,
     pub revoked: bool,
