@@ -1,0 +1,19 @@
+# Run the invites app against an existing kanidm instance.
+#
+#   cp .env.example .env   # fill in the OIDC client + service token
+#   docker compose up --build
+#
+# IP/PORT/DATABASE_URL already have container-appropriate defaults baked into the
+# image; .env only needs the deployment-specific secrets and APP_BASE_URL.
+services:
+  invites:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file: .env
+    volumes:
+      - invites-data:/data
+    restart: unless-stopped
+
+volumes:
+  invites-data:

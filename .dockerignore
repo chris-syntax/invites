@@ -1,0 +1,15 @@
+# Keep the build context small and reproducible: rebuild artifacts and assets
+# from source inside the image rather than shipping host state.
+/target
+/dist
+.dioxus
+/assets/tailwind.css
+
+# Secrets and local database — never bake into an image layer.
+.env
+*.db
+*.db-shm
+*.db-wal
+
+.git
+.gitignore
