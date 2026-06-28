@@ -17,11 +17,13 @@ Ship a **multi-stage Dockerfile** plus a `compose.yaml` for the common
 single-host run.
 
 - **Builder** (`rust:1.96-bookworm`): adds the `wasm32-unknown-unknown` target,
-  Node 24 (Tailwind), and `dioxus-cli@0.7.9` (fetched prebuilt via
+  the standalone Tailwind binary, and `dioxus-cli@0.7.9` (fetched prebuilt via
   cargo-binstall to avoid a multi-minute source build). It generates
   `assets/tailwind.css` explicitly before `dx bundle`, because the `asset!`
   macro needs the file at compile time — the same ordering mise's lint/test
-  tasks rely on.
+  tasks rely on. No Node: dx is self-contained, and the standalone Tailwind CLI
+  bundles the `tailwindcss` library (so `@import "tailwindcss"` resolves with no
+  `node_modules`, which `npx @tailwindcss/cli` cannot do).
 - **Runtime** (`debian:bookworm-slim`): carries only the bundle
   (`target/dx/invites/release/web/`) and `ca-certificates`. Runs as a non-root
   user (`appuser`, uid 10001).

@@ -1,15 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # ── Builder ────────────────────────────────────────────────────────────────
-# Compiles the wasm client + server bundle with the Dioxus CLI. Needs the wasm
-# target (client) and Node (Tailwind v4 CLI, which `dx bundle` shells out to).
+# Compiles the wasm client + server bundle with the Dioxus CLI. dx is
+# self-contained (no Node needed); the only external tool is the standalone
+# Tailwind binary, which generates the stylesheet the `asset!` macro embeds.
 FROM rust:1.96-bookworm AS builder
 
-# Node 24 for the Tailwind CLI; curl/ca-certificates for the binstall fetch.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rustup target add wasm32-unknown-unknown
@@ -20,12 +18,20 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
         https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
     && cargo binstall -y dioxus-cli@0.7.9
 
+# Standalone Tailwind CLI (per ADR 0002). It bundles the `tailwindcss` library,
+# so it resolves the `@import "tailwindcss"` in tailwind.css with no node_modules
+# — unlike `npx @tailwindcss/cli`, which only fetches the CLI and then fails to
+# resolve that import. The linux-x64 build is glibc-linked (matches bookworm).
+RUN curl -fsSL -o /usr/local/bin/tailwindcss \
+        https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.1/tailwindcss-linux-x64 \
+    && chmod +x /usr/local/bin/tailwindcss
+
 WORKDIR /src
 COPY . .
 
 # Generate assets/tailwind.css before compiling: the `asset!` macro needs it at
 # compile time (same step mise's lint/test tasks run).
-RUN npx --yes @tailwindcss/cli -i ./tailwind.css -o ./assets/tailwind.css --minify
+RUN tailwindcss -i ./tailwind.css -o ./assets/tailwind.css --minify
 
 # Produces target/dx/invites/release/web/{server, public/}.
 RUN dx bundle --platform web --release
