@@ -4,7 +4,11 @@
 # Compiles the wasm client + server bundle with the Dioxus CLI. dx is
 # self-contained (no Node needed); the only external tool is the standalone
 # Tailwind binary, which generates the stylesheet the `asset!` macro embeds.
-FROM rust:1.96-bookworm AS builder
+#
+# trixie (glibc 2.41), not bookworm (glibc 2.36): the prebuilt dioxus-cli is
+# linked against glibc 2.39+, so it won't run on bookworm. The runtime stage
+# matches (trixie) so the server binary built here runs there.
+FROM rust:1.96-trixie AS builder
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
@@ -21,7 +25,7 @@ RUN curl -L --proto '=https' --tlsv1.2 -sSf \
 # Standalone Tailwind CLI (per ADR 0002). It bundles the `tailwindcss` library,
 # so it resolves the `@import "tailwindcss"` in tailwind.css with no node_modules
 # — unlike `npx @tailwindcss/cli`, which only fetches the CLI and then fails to
-# resolve that import. The linux-x64 build is glibc-linked (matches bookworm).
+# resolve that import. The linux-x64 build is glibc-linked (matches the base).
 RUN curl -fsSL -o /usr/local/bin/tailwindcss \
         https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.1/tailwindcss-linux-x64 \
     && chmod +x /usr/local/bin/tailwindcss
@@ -37,7 +41,8 @@ RUN tailwindcss -i ./tailwind.css -o ./assets/tailwind.css --minify
 RUN dx bundle --platform web --release
 
 # ── Runtime ────────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
+# trixie to match the builder's glibc (the server binary is glibc-linked).
+FROM debian:trixie-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \

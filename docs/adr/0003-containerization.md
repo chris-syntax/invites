@@ -16,7 +16,7 @@ that actually runs in production.
 Ship a **multi-stage Dockerfile** plus a `compose.yaml` for the common
 single-host run.
 
-- **Builder** (`rust:1.96-bookworm`): adds the `wasm32-unknown-unknown` target,
+- **Builder** (`rust:1.96-trixie`): adds the `wasm32-unknown-unknown` target,
   the standalone Tailwind binary, and `dioxus-cli@0.7.9` (fetched prebuilt via
   cargo-binstall to avoid a multi-minute source build). It generates
   `assets/tailwind.css` explicitly before `dx bundle`, because the `asset!`
@@ -24,7 +24,7 @@ single-host run.
   tasks rely on. No Node: dx is self-contained, and the standalone Tailwind CLI
   bundles the `tailwindcss` library (so `@import "tailwindcss"` resolves with no
   `node_modules`, which `npx @tailwindcss/cli` cannot do).
-- **Runtime** (`debian:bookworm-slim`): carries only the bundle
+- **Runtime** (`debian:trixie-slim`): carries only the bundle
   (`target/dx/invites/release/web/`) and `ca-certificates`. Runs as a non-root
   user (`appuser`, uid 10001).
 - The bundle's `server` binary and its `public/` directory are copied together
@@ -48,6 +48,9 @@ single-host run.
   several minutes to every cold build; binstall pulls the pinned prebuilt
   binary. (Source install remains the fallback if a binstall artifact is ever
   unavailable.)
+- **bookworm base images** — rejected. The prebuilt dioxus-cli requires
+  glibc 2.39+, which bookworm (2.36) lacks; trixie (2.41) satisfies it on both
+  stages, keeping the fast binstall path instead of a source build of the CLI.
 - **Distroless / `scratch` runtime** — deferred. The reqwest/rustls path uses
   bundled webpki roots, but `ca-certificates` on slim keeps TLS robust and the
   image is still small; revisit if image size becomes a constraint.
